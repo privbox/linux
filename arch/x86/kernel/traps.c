@@ -671,7 +671,15 @@ DEFINE_IDTENTRY_RAW(exc_int3)
  */
 asmlinkage __visible noinstr struct pt_regs *sync_regs(struct pt_regs *eregs)
 {
-	struct pt_regs *regs = (struct pt_regs *)this_cpu_read(cpu_current_top_of_stack) - 1;
+	u64 stack_top = this_cpu_read(cpu_current_top_of_stack);
+	struct pt_regs *regs;
+
+	// Nested entry, we were on thread stack already, but switched to IST
+	if ((stack_top > eregs->sp) && (eregs->sp > (stack_top - THREAD_SIZE)))
+		regs = (struct pt_regs *) eregs->sp;
+	else
+		regs = (struct pt_regs *) stack_top;
+	regs -= 1;
 	if (regs != eregs)
 		*regs = *eregs;
 	return regs;
@@ -705,7 +713,7 @@ struct bad_iret_stack *fixup_bad_iret(struct bad_iret_stack *s)
 	/* Update the entry stack */
 	__memcpy(new_stack, &tmp, sizeof(tmp));
 
-	BUG_ON(!user_mode(&new_stack->regs));
+	// BUG_ON(!user_mode(&new_stack->regs));
 	return new_stack;
 }
 #endif

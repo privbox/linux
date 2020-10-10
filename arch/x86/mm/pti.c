@@ -142,6 +142,7 @@ pgd_t __pti_set_user_pgtbl(pgd_t *pgdp, pgd_t pgd)
 	 */
 	kernel_to_user_pgdp(pgdp)->pgd = pgd.pgd;
 
+#ifndef CONFIG_PIOT
 	/*
 	 * If this is normal user memory, make it NX in the kernel
 	 * pagetables so that, if we somehow screw up and return to
@@ -159,6 +160,7 @@ pgd_t __pti_set_user_pgtbl(pgd_t *pgdp, pgd_t pgd)
 	    (__supported_pte_mask & _PAGE_NX))
 		pgd.pgd |= _PAGE_NX;
 
+#endif
 	/* return the copy of the PGD we want the kernel to use: */
 	return pgd;
 }

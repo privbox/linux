@@ -23,19 +23,12 @@ static __always_inline void __run_on_irqstack(void *func, void *arg)
 	__this_cpu_sub(irq_count, 1);
 }
 
+
 #else /* CONFIG_X86_64 */
 static inline bool irqstack_active(void) { return false; }
 static inline void __run_on_irqstack(void *func, void *arg) { }
 #endif /* !CONFIG_X86_64 */
 
-static __always_inline bool irq_needs_irq_stack(struct pt_regs *regs)
-{
-	if (IS_ENABLED(CONFIG_X86_32))
-		return false;
-	if (!regs)
-		return !irqstack_active();
-	return !user_mode(regs) && !irqstack_active();
-}
 
 static __always_inline void run_on_irqstack_cond(void *func, void *arg,
 						 struct pt_regs *regs)
@@ -44,10 +37,7 @@ static __always_inline void run_on_irqstack_cond(void *func, void *arg,
 
 	lockdep_assert_irqs_disabled();
 
-	if (irq_needs_irq_stack(regs))
-		__run_on_irqstack(__func, arg);
-	else
-		__func(arg);
+	__func(arg);
 }
 
 #endif

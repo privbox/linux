@@ -2913,3 +2913,12 @@ source "drivers/firmware/Kconfig"
 source "arch/x86/kvm/Kconfig"
 
 source "arch/x86/Kconfig.assembler"
+
+config PIOT
+	def_bool y
+	help
+	  enables PIOT
+
+config PIOT_DEBUG
+	def_bool yes
+	depends on PIOT

@@ -430,6 +430,7 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 	struct fpu *prev_fpu = &prev->fpu;
 	struct fpu *next_fpu = &next->fpu;
 	int cpu = smp_processor_id();
+	int prev_mode = test_thread_flag(TIF_KERNCALL);
 
 	WARN_ON_ONCE(IS_ENABLED(CONFIG_DEBUG_ENTRY) &&
 		     this_cpu_read(irq_count) != -1);
@@ -491,6 +492,19 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 
 	/* Reload sp0. */
 	update_task_stack(next_p);
+
+	if (prev_mode != test_thread_flag(TIF_KERNCALL)) {
+		if (prev_mode) { // Old is priv -> new is regular
+			wrmsr(MSR_STAR, 0, (__USER32_CS << 16) | __KERNEL_CS);
+			wrmsrl(MSR_LSTAR, (unsigned long)entry_SYSCALL_64);
+		}
+		else  // New is privileged
+		{
+			wrmsr(MSR_STAR, 0, (__KERNCALL_CS << 16) | __KERNEL_CS);
+			wrmsrl(MSR_LSTAR, (unsigned long)kern_entry_SYSCALL_64);
+		}
+		// pr_err("Rewrote MSRs!\n");
+	}
 
 	switch_to_extra(prev_p, next_p);
 

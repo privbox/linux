@@ -249,6 +249,7 @@ static void __init mds_select_mitigation(void)
 			mds_mitigation = MDS_MITIGATION_VMWERV;
 
 		static_branch_enable(&mds_user_clear);
+		pr_err("dimak: enable mds_user_clear (1)\n");
 
 		if (!boot_cpu_has(X86_BUG_MSBDS_ONLY) &&
 		    (mds_nosmt || cpu_mitigations_auto_nosmt()))
@@ -361,6 +362,7 @@ static void __init taa_select_mitigation(void)
 	 * present on host, enable the mitigation for UCODE_NEEDED as well.
 	 */
 	static_branch_enable(&mds_user_clear);
+	pr_err("dimak: enable mds_user_clear (2)\n");
 
 	if (taa_nosmt || cpu_mitigations_auto_nosmt())
 		cpu_smt_disable(false);

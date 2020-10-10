@@ -91,9 +91,23 @@ SYM_CODE_END(native_usergs_sysret64)
  * with them due to bugs in both AMD and Intel CPUs.
  */
 
+SYM_CODE_START(kern_entry_SYSCALL_64)
+	UNWIND_HINT_EMPTY
+	/* tss.sp2 is scratch space. */
+	movq	%rsp, PER_CPU_VAR(cpu_tss_rw + TSS_sp2)
+	movq	PER_CPU_VAR(cpu_current_top_of_stack), %rsp
+
+	/* Construct struct pt_regs on stack */
+	pushq	$__KERNEL_DS				/* pt_regs->ss */
+	pushq	PER_CPU_VAR(cpu_tss_rw + TSS_sp2)	/* pt_regs->sp */
+	pushq	%r11					/* pt_regs->flags */
+	pushq	$__KERNCALL_CS				/* pt_regs->cs */
+	pushq	%rcx					/* pt_regs->ip */
+	jmp entry_SYSCALL_64_after_hwframe
+SYM_CODE_END(kern_entry_SYSCALL_64)
+
 SYM_CODE_START(entry_SYSCALL_64)
 	UNWIND_HINT_EMPTY
-
 	swapgs
 	/* tss.sp2 is scratch space. */
 	movq	%rsp, PER_CPU_VAR(cpu_tss_rw + TSS_sp2)
@@ -152,6 +166,7 @@ SYM_INNER_LABEL(entry_SYSCALL_64_after_hwframe, SYM_L_GLOBAL)
 
 	cmpq	$__USER_CS, CS(%rsp)		/* CS must match SYSRET */
 	jne	swapgs_restore_regs_and_return_to_usermode
+	/* dimak FIXME */
 
 	movq	R11(%rsp), %r11
 	cmpq	%r11, EFLAGS(%rsp)		/* R11 == RFLAGS */
@@ -182,6 +197,7 @@ SYM_INNER_LABEL(entry_SYSCALL_64_after_hwframe, SYM_L_GLOBAL)
 
 	cmpq	$__USER_DS, SS(%rsp)		/* SS must match SYSRET */
 	jne	swapgs_restore_regs_and_return_to_usermode
+	/* dimak FIXME */
 
 	/*
 	 * We win! This label is here just for ease of understanding
@@ -359,7 +375,7 @@ SYM_CODE_START(\asmsym)
 		 * If coming from kernel space, create a 6-word gap to allow the
 		 * int3 handler to emulate a call instruction.
 		 */
-		testb	$3, CS-ORIG_RAX(%rsp)
+		cmpq	$__KERNEL_CS, CS-ORIG_RAX(%rsp)
 		jnz	.Lfrom_usermode_no_gap_\@
 		.rept	6
 		pushq	5*8(%rsp)
@@ -367,12 +383,12 @@ SYM_CODE_START(\asmsym)
 		UNWIND_HINT_IRET_REGS offset=8
 .Lfrom_usermode_no_gap_\@:
 	.endif
-
 	idtentry_body \cfunc \has_error_code
 
 _ASM_NOKPROBE(\asmsym)
 SYM_CODE_END(\asmsym)
 .endm
+
 
 /*
  * Interrupt entry/exit.
@@ -423,7 +439,7 @@ SYM_CODE_START(\asmsym)
 	 * If the entry is from userspace, switch stacks and treat it as
 	 * a normal entry.
 	 */
-	testb	$3, CS-ORIG_RAX(%rsp)
+	cmpq	$__KERNEL_CS, CS-ORIG_RAX(%rsp)
 	jnz	.Lfrom_usermode_switch_stack_\@
 
 	/*
@@ -493,13 +509,10 @@ __irqentry_text_end:
 
 SYM_CODE_START_LOCAL(common_interrupt_return)
 SYM_INNER_LABEL(swapgs_restore_regs_and_return_to_usermode, SYM_L_GLOBAL)
-#ifdef CONFIG_DEBUG_ENTRY
 	/* Assert that pt_regs indicates user mode. */
 	testb	$3, CS(%rsp)
-	jnz	1f
-	ud2
-1:
-#endif
+	jz	1f
+
 	POP_REGS pop_rdi=0
 
 	/*
@@ -533,11 +546,43 @@ SYM_INNER_LABEL(swapgs_restore_regs_and_return_to_usermode, SYM_L_GLOBAL)
 	SWAPGS
 	INTERRUPT_RETURN
 
+1:
+	POP_REGS pop_rdi=0
+
+	/*
+	 * The stack is now user RDI, orig_ax, RIP, CS, EFLAGS, RSP, SS.
+	 * Save old stack pointer and switch to trampoline stack.
+	 */
+	movq	%rsp, %rdi
+	movq	PER_CPU_VAR(cpu_tss_rw + TSS_sp0), %rsp
+	UNWIND_HINT_EMPTY
+
+	/* Copy the IRET frame to the trampoline stack. */
+	pushq	6*8(%rdi)	/* SS */
+	pushq	5*8(%rdi)	/* RSP */
+	pushq	4*8(%rdi)	/* EFLAGS */
+	pushq	3*8(%rdi)	/* CS */
+	pushq	2*8(%rdi)	/* RIP */
+
+	/* Push user RDI on the trampoline stack. */
+	pushq	(%rdi)
+
+	/*
+	 * We are on the trampoline stack.  All regs except RDI are live.
+	 * We can do future final exit work right here.
+	 */
+	STACKLEAK_ERASE_NOCLOBBER
+
+	/* Restore RDI. */
+	popq	%rdi
+	INTERRUPT_RETURN
+
+
 
 SYM_INNER_LABEL(restore_regs_and_return_to_kernel, SYM_L_GLOBAL)
 #ifdef CONFIG_DEBUG_ENTRY
 	/* Assert that pt_regs indicates kernel mode. */
-	testb	$3, CS(%rsp)
+	cmqp	$__KERNEL_CS, CS(%rsp)
 	jz	1f
 	ud2
 1:
@@ -872,8 +917,10 @@ SYM_CODE_START_LOCAL(error_entry)
 	cld
 	PUSH_AND_CLEAR_REGS save_ret=1
 	ENCODE_FRAME_POINTER 8
-	testb	$3, CS+8(%rsp)
+	cmpq	$__KERNEL_CS, CS+8(%rsp)
 	jz	.Lerror_kernelspace
+	cmpq	$__KERNCALL_CS, CS+8(%rsp)
+	jz	.Lerror_entry_done
 
 	/*
 	 * We entered from user mode or we're pretending to have entered
@@ -884,9 +931,8 @@ SYM_CODE_START_LOCAL(error_entry)
 	/* We have user CR3.  Change to kernel CR3. */
 	SWITCH_TO_KERNEL_CR3 scratch_reg=%rax
 
-.Lerror_entry_from_usermode_after_swapgs:
-	/* Put us onto the real thread stack. */
-	popq	%r12				/* save return addr in %12 */
+.Lerror_entry_done:
+	popq	%r12
 	movq	%rsp, %rdi			/* arg0 = pt_regs pointer */
 	call	sync_regs
 	movq	%rax, %rsp			/* switch stack */
@@ -896,8 +942,7 @@ SYM_CODE_START_LOCAL(error_entry)
 
 .Lerror_entry_done_lfence:
 	FENCE_SWAPGS_KERNEL_ENTRY
-.Lerror_entry_done:
-	ret
+	jmp	.Lerror_entry_done
 
 	/*
 	 * There are two places in the kernel that can potentially fault with
@@ -945,13 +990,13 @@ SYM_CODE_START_LOCAL(error_entry)
 	mov	%rsp, %rdi
 	call	fixup_bad_iret
 	mov	%rax, %rsp
-	jmp	.Lerror_entry_from_usermode_after_swapgs
+	jmp	.Lerror_entry_done
 SYM_CODE_END(error_entry)
 
 SYM_CODE_START_LOCAL(error_return)
 	UNWIND_HINT_REGS
 	DEBUG_ENTRY_ASSERT_IRQS_OFF
-	testb	$3, CS(%rsp)
+	cmpq	$__KERNEL_CS, CS(%rsp)
 	jz	restore_regs_and_return_to_kernel
 	jmp	swapgs_restore_regs_and_return_to_usermode
 SYM_CODE_END(error_return)
@@ -1010,8 +1055,10 @@ SYM_CODE_START(asm_exc_nmi)
 	/* Use %rdx as our temp variable throughout */
 	pushq	%rdx
 
-	testb	$3, CS-RIP+8(%rsp)
+	cmpq	$__KERNEL_CS, CS-RIP+8(%rsp)
 	jz	.Lnmi_from_kernel
+	cmpq	$__KERNCALL_CS, CS-RIP+8(%rsp)
+	jz	.Lnmi_from_kerncall
 
 	/*
 	 * NMI from user mode.  We need to run on the thread stack, but we
@@ -1028,6 +1075,7 @@ SYM_CODE_START(asm_exc_nmi)
 	cld
 	FENCE_SWAPGS_USER_ENTRY
 	SWITCH_TO_KERNEL_CR3 scratch_reg=%rdx
+.Lnmi_from_kerncall:
 	movq	%rsp, %rdx
 	movq	PER_CPU_VAR(cpu_current_top_of_stack), %rsp
 	UNWIND_HINT_IRET_REGS base=%rdx offset=8

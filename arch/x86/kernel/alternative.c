@@ -700,7 +700,7 @@ static void __init int3_selftest(void)
 
 void __init alternative_instructions(void)
 {
-	int3_selftest();
+	// int3_selftest();
 
 	/*
 	 * The patching is not fully atomic, so try to avoid local

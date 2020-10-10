@@ -157,3 +157,9 @@ ifeq ($(CONFIG_X86_64),y)
 endif
 
 obj-$(CONFIG_IMA_SECURE_AND_OR_TRUSTED_BOOT)	+= ima_arch.o
+obj-$(CONFIG_PIOT)				+= piot.o piot_gate.o
+CFLAGS_REMOVE_piot.o += -O2
+CFLAGS_piot.o += -O0
+
+
+obj-y += smapbench.o

@@ -126,6 +126,7 @@ DEFINE_PER_CPU_PAGE_ALIGNED(struct gdt_page, gdt_page) = { .gdt = {
 	[GDT_ENTRY_DEFAULT_USER32_CS]	= GDT_ENTRY_INIT(0xc0fb, 0, 0xfffff),
 	[GDT_ENTRY_DEFAULT_USER_DS]	= GDT_ENTRY_INIT(0xc0f3, 0, 0xfffff),
 	[GDT_ENTRY_DEFAULT_USER_CS]	= GDT_ENTRY_INIT(0xa0fb, 0, 0xfffff),
+	[GDT_ENTRY_KERNCALL_CS]		= GDT_ENTRY_INIT(0xa09b, 0, 0xfffff),
 #else
 	[GDT_ENTRY_KERNEL_CS]		= GDT_ENTRY_INIT(0xc09a, 0, 0xfffff),
 	[GDT_ENTRY_KERNEL_DS]		= GDT_ENTRY_INIT(0xc092, 0, 0xfffff),
@@ -1806,6 +1807,12 @@ static inline void tss_setup_ist(struct tss_struct *tss)
 	tss->x86_tss.ist[IST_INDEX_NMI] = __this_cpu_ist_top_va(NMI);
 	tss->x86_tss.ist[IST_INDEX_DB] = __this_cpu_ist_top_va(DB);
 	tss->x86_tss.ist[IST_INDEX_MCE] = __this_cpu_ist_top_va(MCE);
+	tss->x86_tss.ist[IST_INDEX_PIOT] = __this_cpu_ist_top_va(PIOT);
+	tss->x86_tss.ist[IST_INDEX_IRQ] = __this_cpu_ist_top_va(IRQ);
+	printk(KERN_DEBUG "IST PIOT %llx\n", (u64) __this_cpu_ist_top_va(PIOT));
+	printk(KERN_DEBUG "IST PIOT size %lx\n", CEA_ESTACK_SIZE(PIOT));
+	printk(KERN_DEBUG "IST IRQ %llx\n", (u64) __this_cpu_ist_top_va(IRQ));
+	printk(KERN_DEBUG "IST IRQ size %lx\n", CEA_ESTACK_SIZE(IRQ));
 }
 
 #else /* CONFIG_X86_64 */

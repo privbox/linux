@@ -53,6 +53,9 @@ struct idt_data {
 #define TSKG(_vector, _gdt)				\
 	G(_vector, NULL, DEFAULT_STACK, GATE_TASK, DPL0, _gdt << 3)
 
+#define SYSISTG(_vector, _addr, _ist)				\
+	G(_vector, _addr, _ist + 1, GATE_INTERRUPT, DPL3, __KERNEL_CS)
+
 #define IDT_TABLE_SIZE		(IDT_ENTRIES * sizeof(gate_desc))
 
 static bool idt_setup_done __initdata;
@@ -119,41 +122,41 @@ static const __initconst struct idt_data def_idts[] = {
  */
 static const __initconst struct idt_data apic_idts[] = {
 #ifdef CONFIG_SMP
-	INTG(RESCHEDULE_VECTOR,			asm_sysvec_reschedule_ipi),
-	INTG(CALL_FUNCTION_VECTOR,		asm_sysvec_call_function),
-	INTG(CALL_FUNCTION_SINGLE_VECTOR,	asm_sysvec_call_function_single),
-	INTG(IRQ_MOVE_CLEANUP_VECTOR,		asm_sysvec_irq_move_cleanup),
-	INTG(REBOOT_VECTOR,			asm_sysvec_reboot),
+	ISTG(RESCHEDULE_VECTOR,			asm_sysvec_reschedule_ipi,	IST_INDEX_IRQ),
+	ISTG(CALL_FUNCTION_VECTOR,		asm_sysvec_call_function,	IST_INDEX_IRQ),
+	ISTG(CALL_FUNCTION_SINGLE_VECTOR,	asm_sysvec_call_function_single,IST_INDEX_IRQ),
+	ISTG(IRQ_MOVE_CLEANUP_VECTOR,		asm_sysvec_irq_move_cleanup,	IST_INDEX_IRQ),
+	ISTG(REBOOT_VECTOR,			asm_sysvec_reboot,		IST_INDEX_IRQ),
 #endif
 
 #ifdef CONFIG_X86_THERMAL_VECTOR
-	INTG(THERMAL_APIC_VECTOR,		asm_sysvec_thermal),
+	ISTG(THERMAL_APIC_VECTOR,		asm_sysvec_thermal,		IST_INDEX_IRQ),
 #endif
 
 #ifdef CONFIG_X86_MCE_THRESHOLD
-	INTG(THRESHOLD_APIC_VECTOR,		asm_sysvec_threshold),
+	ISTG(THRESHOLD_APIC_VECTOR,		asm_sysvec_threshold,		IST_INDEX_IRQ),
 #endif
 
 #ifdef CONFIG_X86_MCE_AMD
-	INTG(DEFERRED_ERROR_VECTOR,		asm_sysvec_deferred_error),
+	ISTG(DEFERRED_ERROR_VECTOR,		asm_sysvec_deferred_error,	IST_INDEX_IRQ),
 #endif
 
 #ifdef CONFIG_X86_LOCAL_APIC
-	INTG(LOCAL_TIMER_VECTOR,		asm_sysvec_apic_timer_interrupt),
-	INTG(X86_PLATFORM_IPI_VECTOR,		asm_sysvec_x86_platform_ipi),
+	ISTG(LOCAL_TIMER_VECTOR,		asm_sysvec_apic_timer_interrupt,IST_INDEX_IRQ),
+	ISTG(X86_PLATFORM_IPI_VECTOR,		asm_sysvec_x86_platform_ipi,	IST_INDEX_IRQ),
 # ifdef CONFIG_HAVE_KVM
-	INTG(POSTED_INTR_VECTOR,		asm_sysvec_kvm_posted_intr_ipi),
-	INTG(POSTED_INTR_WAKEUP_VECTOR,		asm_sysvec_kvm_posted_intr_wakeup_ipi),
-	INTG(POSTED_INTR_NESTED_VECTOR,		asm_sysvec_kvm_posted_intr_nested_ipi),
+	ISTG(POSTED_INTR_VECTOR,		asm_sysvec_kvm_posted_intr_ipi,		IST_INDEX_IRQ),
+	ISTG(POSTED_INTR_WAKEUP_VECTOR,		asm_sysvec_kvm_posted_intr_wakeup_ipi,	IST_INDEX_IRQ),
+	ISTG(POSTED_INTR_NESTED_VECTOR,		asm_sysvec_kvm_posted_intr_nested_ipi,	IST_INDEX_IRQ),
 # endif
 # ifdef CONFIG_IRQ_WORK
-	INTG(IRQ_WORK_VECTOR,			asm_sysvec_irq_work),
+	ISTG(IRQ_WORK_VECTOR,			asm_sysvec_irq_work,			IST_INDEX_IRQ),
 # endif
 # ifdef CONFIG_X86_UV
 	INTG(UV_BAU_MESSAGE,			asm_sysvec_uv_bau_message),
 # endif
-	INTG(SPURIOUS_APIC_VECTOR,		asm_sysvec_spurious_apic_interrupt),
-	INTG(ERROR_APIC_VECTOR,			asm_sysvec_error_interrupt),
+	ISTG(SPURIOUS_APIC_VECTOR,		asm_sysvec_spurious_apic_interrupt,	IST_INDEX_IRQ),
+	ISTG(ERROR_APIC_VECTOR,			asm_sysvec_error_interrupt,		IST_INDEX_IRQ),
 #endif
 };
 
@@ -221,6 +224,23 @@ static __init void set_intr_gate(unsigned int n, const void *addr)
 	idt_setup_from_table(idt_table, &data, 1, false);
 }
 
+static __init void set_intr_gate_ist(unsigned int n, const void *addr, unsigned int ist)
+{
+	struct idt_data data;
+
+	BUG_ON(n > 0xFF);
+
+	memset(&data, 0, sizeof(data));
+	data.vector	= n;
+	data.addr	= addr;
+	data.segment	= __KERNEL_CS;
+	data.bits.type	= GATE_INTERRUPT;
+	data.bits.p	= 1;
+	data.bits.ist	= ist ? (ist + 1) : 0;
+
+	idt_setup_from_table(idt_table, &data, 1, false);
+}
+
 /**
  * idt_setup_early_traps - Initialize the idt table with early traps
  *
@@ -257,6 +277,23 @@ static const __initconst struct idt_data early_pf_idts[] = {
  * cpu_init() when the TSS has been initialized.
  */
 static const __initconst struct idt_data ist_idts[] = {
+	ISTG(X86_TRAP_DE,	asm_exc_divide_error,		IST_INDEX_PIOT),
+	ISTG(X86_TRAP_BR,	asm_exc_bounds,			IST_INDEX_PIOT),
+	ISTG(X86_TRAP_UD,	asm_exc_invalid_op,		IST_INDEX_PIOT),
+	ISTG(X86_TRAP_NM,	asm_exc_device_not_available,	IST_INDEX_PIOT),
+	ISTG(X86_TRAP_OLD_MF,	asm_exc_coproc_segment_overrun,	IST_INDEX_PIOT),
+	ISTG(X86_TRAP_TS,	asm_exc_invalid_tss,		IST_INDEX_PIOT),
+	ISTG(X86_TRAP_NP,	asm_exc_segment_not_present,	IST_INDEX_PIOT),
+	ISTG(X86_TRAP_SS,	asm_exc_stack_segment,		IST_INDEX_PIOT),
+	ISTG(X86_TRAP_GP,	asm_exc_general_protection,	IST_INDEX_PIOT),
+	ISTG(X86_TRAP_SPURIOUS,	asm_exc_spurious_interrupt_bug,	IST_INDEX_PIOT),
+	ISTG(X86_TRAP_MF,	asm_exc_coprocessor_error,	IST_INDEX_PIOT),
+	ISTG(X86_TRAP_AC,	asm_exc_alignment_check,	IST_INDEX_PIOT),
+	ISTG(X86_TRAP_XF,	asm_exc_simd_coprocessor_error,	IST_INDEX_PIOT),
+	ISTG(X86_TRAP_PF,	asm_exc_page_fault,		IST_INDEX_PIOT),
+	SYSISTG(X86_TRAP_OF,	asm_exc_overflow,		IST_INDEX_PIOT),
+	SYSISTG(X86_TRAP_BP,	asm_exc_int3,			IST_INDEX_PIOT),
+
 	ISTG(X86_TRAP_DB,	asm_exc_debug,		IST_INDEX_DB),
 	ISTG(X86_TRAP_NMI,	asm_exc_nmi,		IST_INDEX_NMI),
 	ISTG(X86_TRAP_DF,	asm_exc_double_fault,	IST_INDEX_DF),
@@ -317,7 +354,7 @@ void __init idt_setup_apic_and_irq_gates(void)
 
 	for_each_clear_bit_from(i, system_vectors, FIRST_SYSTEM_VECTOR) {
 		entry = irq_entries_start + 8 * (i - FIRST_EXTERNAL_VECTOR);
-		set_intr_gate(i, entry);
+		set_intr_gate_ist(i, entry, IST_INDEX_IRQ);
 	}
 
 #ifdef CONFIG_X86_LOCAL_APIC
@@ -328,7 +365,7 @@ void __init idt_setup_apic_and_irq_gates(void)
 		 * /proc/interrupts.
 		 */
 		entry = spurious_entries_start + 8 * (i - FIRST_SYSTEM_VECTOR);
-		set_intr_gate(i, entry);
+		set_intr_gate_ist(i, entry, IST_INDEX_IRQ);
 	}
 #endif
 	/* Map IDT into CPU entry area and reload it. */

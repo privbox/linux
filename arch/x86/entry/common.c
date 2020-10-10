@@ -208,7 +208,7 @@ static long syscall_trace_enter(struct pt_regs *regs)
 	(_TIF_SIGPENDING | _TIF_NOTIFY_RESUME | _TIF_UPROBE |	\
 	 _TIF_NEED_RESCHED | _TIF_USER_RETURN_NOTIFY | _TIF_PATCH_PENDING)
 
-static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
+static void exit_to_usermode_loop(struct pt_regs *regs, u64 cached_flags)
 {
 	/*
 	 * In order to return to user mode, we need to have IRQs off with
@@ -217,6 +217,10 @@ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
 	 * so we need to loop.  Disabling preemption wouldn't help: doing the
 	 * work to clear some of the flags can sleep.
 	 */
+	u64 loop_mask = EXIT_TO_USERMODE_LOOP_FLAGS;
+	if (cached_flags & _TIF_KERNCALL)
+		loop_mask &= ~_TIF_SIGPENDING;
+
 	while (true) {
 		/* We have work to do. */
 		local_irq_enable();
@@ -231,7 +235,7 @@ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
 			klp_update_patch_state(current);
 
 		/* deal with pending signal delivery */
-		if (cached_flags & _TIF_SIGPENDING)
+		if (cached_flags & _TIF_SIGPENDING && !(cached_flags & _TIF_KERNCALL))
 			do_signal(regs);
 
 		if (cached_flags & _TIF_NOTIFY_RESUME) {
@@ -248,15 +252,16 @@ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
 
 		cached_flags = READ_ONCE(current_thread_info()->flags);
 
-		if (!(cached_flags & EXIT_TO_USERMODE_LOOP_FLAGS))
+		if (!(cached_flags & loop_mask))
 			break;
 	}
 }
 
+
 static void __prepare_exit_to_usermode(struct pt_regs *regs)
 {
 	struct thread_info *ti = current_thread_info();
-	u32 cached_flags;
+	u64 cached_flags;
 
 	addr_limit_user_check();
 
@@ -396,6 +401,99 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	exit_to_user_mode();
 }
 #endif
+
+static inline unsigned long get_cs(void) {
+	unsigned long ret;
+	__asm__ __volatile__ ("mov %%cs, %0" : "=r"(ret) : : );
+	return ret;
+}
+
+static inline void set_cs(unsigned long new_cs) {
+	__asm__ __volatile__(
+		"pushq	%0\n\t"
+		"pushq	$1f\n\t"
+		"lretq\n\t"
+		"1:" ::"r"(new_cs):
+	);
+}
+
+#define EXIT_TO_KERNCALL_LOOP_FLAGS	(_TIF_NEED_RESCHED | _TIF_NOTIFY_RESUME)
+
+static inline void kerncall_exit_to_usermode_loop(struct pt_regs *regs)
+{
+	do {
+		u64 cached_flags = READ_ONCE(current_thread_info()->flags);
+		if (likely(!(cached_flags & EXIT_TO_KERNCALL_LOOP_FLAGS)))
+			break;
+		if (cached_flags & _TIF_NEED_RESCHED) {
+			schedule();
+		}
+
+		if (cached_flags & _TIF_NOTIFY_RESUME) {
+			// pr_err("kerncall notify resume!\n");
+			clear_thread_flag(TIF_NOTIFY_RESUME);
+			tracehook_notify_resume(regs);
+			rseq_handle_notify_resume(NULL, regs);
+		}
+	} while (true);
+
+}
+
+static void __kerncall_prepare_exit_to_usermode(struct pt_regs *regs)
+{
+	struct thread_info *ti = current_thread_info();
+	u64 cached_flags;
+
+	kerncall_exit_to_usermode_loop(regs);
+
+	/* Reload ti->flags; we may have rescheduled above. */
+	cached_flags = READ_ONCE(ti->flags);
+
+	if (unlikely(cached_flags & _TIF_IO_BITMAP))
+		tss_update_io_bitmap();
+
+	fpregs_assert_state_consistent();
+	if (unlikely(cached_flags & _TIF_NEED_FPU_LOAD))
+		switch_fpu_return();
+}
+
+
+__visible noinstr void do_kerncall_64(unsigned long nr, struct pt_regs *regs)
+{
+	struct thread_info *ti = current_thread_info();
+	u64 cached_flags = READ_ONCE(ti->flags);
+
+
+	if (cached_flags & _TIF_WORK_SYSCALL_ENTRY)
+		nr = syscall_trace_enter(regs);
+
+	if (likely(nr < NR_syscalls)) {
+		nr = array_index_nospec(nr, NR_syscalls);
+		regs->ax = sys_call_table[nr](regs);
+	}
+	if (regs->cs == __USER_CS)
+		goto slow_exit;
+
+	cached_flags = READ_ONCE(ti->flags);
+	
+	// We're not exiting to user-space (but we still might have the wrong CS)	
+	if (unlikely(cached_flags & SYSCALL_EXIT_WORK_FLAGS))
+		syscall_slow_exit_work(regs, cached_flags);
+	__kerncall_prepare_exit_to_usermode(regs);
+	mds_user_clear_cpu_buffers();
+
+	if (get_cs() == __KERNEL_CS) {
+		set_cs(__KERNCALL_CS);
+	} else if (get_cs() != __KERNCALL_CS) {
+		panic("Got back with wrong CS");
+	}
+
+	return; /* With interrupts enabled */
+slow_exit:
+	__syscall_return_slowpath(regs);
+	exit_to_user_mode();
+	/* Returning with interrupts disabled! */
+}
 
 #if defined(CONFIG_X86_32) || defined(CONFIG_IA32_EMULATION)
 /*

@@ -20,6 +20,10 @@
 	char	DB_stack[EXCEPTION_STKSZ];	\
 	char	MCE_stack_guard[guardsize];	\
 	char	MCE_stack[EXCEPTION_STKSZ];	\
+	char	PIOT_stack_guard[guardsize];	\
+	char	PIOT_stack[EXCEPTION_STKSZ];	\
+	char	IRQ_stack_guard[guardsize];	\
+	char	IRQ_stack[IRQ_STACK_SIZE];	\
 	char	IST_top_guard[guardsize];	\
 
 /* The exception stacks' physical storage. No guard pages required */
@@ -40,6 +44,8 @@ enum exception_stack_ordering {
 	ESTACK_NMI,
 	ESTACK_DB,
 	ESTACK_MCE,
+	ESTACK_PIOT,
+	ESTACK_IRQ,
 	N_EXCEPTION_STACKS
 };
 

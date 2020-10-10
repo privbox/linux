@@ -128,7 +128,11 @@ static __always_inline int user_mode(struct pt_regs *regs)
 #ifdef CONFIG_X86_32
 	return ((regs->cs & SEGMENT_RPL_MASK) | (regs->flags & X86_VM_MASK)) >= USER_RPL;
 #else
-	return !!(regs->cs & 3);
+	if (regs->cs & 3)
+		return 1;
+	if (regs->cs == __KERNCALL_CS && !(regs->ip >> 63))
+		return 1;
+	return 0;
 #endif
 }
 

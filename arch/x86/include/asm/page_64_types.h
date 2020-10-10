@@ -29,6 +29,9 @@
 #define	IST_INDEX_DB		2
 #define	IST_INDEX_MCE		3
 
+#define IST_INDEX_PIOT		4
+
+#define IST_INDEX_IRQ		5
 /*
  * Set __PAGE_OFFSET to the most negative possible address +
  * PGDIR_SIZE*17 (pgd slot 273).
